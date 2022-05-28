@@ -1,25 +1,24 @@
-# Tested against gdal version
 import os, math, random, shutil, pathlib, sys
 from PIL import Image, ImageFilter, ImageEnhance
 
 geotiffinput = r'D:\SomeDir\YourGEOTIFF.tif'
 MAPSETNAME = "YourMap"
 zoomrange = (0,0) # Zoom ranges up to (0,7). (e.g. (0,0) - (0,3) - (2,4) - etc)
-mapID = "76453275" # eight digit number
+mapID = "12345678" # eight digit number
 mapDrawOrder = "24" # 0-31 range
-BrightnessCorrection = 0 # Brightness correction
-ContrastCorrection = 0 # Contrast correction
+BrightnessCorrection = 1 # Brightness correction [0 <- 1 -> x]
+ContrastCorrection = 1 # Contrast correction [0 <- 1 -> x]
+ImageSharpen = 1 # Sharpen image [0 <- 1 -> x]
 ShowTiles = 0 # Debug tiles (Show [number] of sequential tiles and close, opens images on default .jpg app)
 keepTempDir = 0 # Keep tempdir after finish
 
 bld_gmap32Path = r'D:\mpcdir\bld_gmap32.exe' # Your copy of bld_gmap32.exe
 bld_gmapLicensePath = r'D:\mpcdir\yourlicense.mpl' # Your MPC license file
-gmtPath = r'D:\Etrex32\MapEngine\gmt.exe' # Gmaptool executable http://www.gmaptool.eu/en/content/gmaptool
+gmtPath = r'D:\MapEngine\gmt.exe' # Gmaptool executable http://www.gmaptool.eu/en/content/gmaptool
 
-TILERWSIZE = 0.0014 # How much (in degrees) each output IMG tile will cover in level zero. Other levels a multiple of this
-                    # Base value will be recalculated to fit total source image X extent respecting
-                    # source image pixel size (avoid gaps).
-TILESIZE = 128  # Tile size in pixels to send to compiler (expect worse GPS render performance with values greater than 256)
+TILERWSIZE = 0.001 # Land extent (in degrees) each tile will cover in level zero. Other levels a multiple of this
+                    # Can adjust performance / quality tradeoff by changing TILERWSIZE, TILESIZE and def levelCorrection
+TILESIZE = 128  # Tile size in pixels to send to compiler
 
 def main():
     usertiff = geotiffinput
@@ -51,23 +50,19 @@ def main():
             tcoord = line.split('LOWER RIGHT ( ')[1].split(')')[0]
             MAPVCoordsRight = float(tcoord.split(',')[0].strip())
             MAPVCoordsBottom = float(tcoord.split(',')[1].strip())
-        if "SIZE IS " in line:
-            tsize = line.split('SIZE IS ')[1].strip()
-            TIFFsizeX = tsize.split(',')[0].strip()
-        if "PIXEL SIZE" in line:
-            PIXEL_SIZE = float(line.split("(")[1].split(",")[0])
 
     Xextent = MAPVCoordsRight - MAPVCoordsLeft
     Yextent = MAPVCoordsTop - MAPVCoordsBottom
     Vcoords = []
     TileCount = 0
-    print("Please wait, extracting tiles) \n")
+    print("Please wait, extracting tiles \n")
     for zoomround in range(zoomrange[1] + 1, zoomrange[0], -1):
-        nt1 = Xextent/(TILERWSIZE*zoomround)
-        nt2 = round(float(TIFFsizeX)/nt1)
-        ZTILERWSIZE = float(nt2)*float(PIXEL_SIZE) #Adjust tile extent to conform exact pixel size
-        XTNumber = int(Xextent / ZTILERWSIZE)
-        YTNumber = int(Yextent / ZTILERWSIZE)
+        XTNumber = round(Xextent / (TILERWSIZE * levelCorrection(zoomround)))
+        YTNumber = round(Yextent / (TILERWSIZE * levelCorrection(zoomround)))
+        if XTNumber == 0 or YTNumber == 0:
+            XTNumber = YTNumber = 1
+        ZTILERWSIZE = Xextent / XTNumber
+        ZTILERYWSIZE = Yextent / YTNumber
         XCstep = MAPVCoordsLeft
         YCstep = MAPVCoordsTop
         TileCount = TileCount + (XTNumber * YTNumber)
@@ -76,12 +71,12 @@ def main():
                 tilename = 'tile_Z' + str(zoomround-1) + '_Y' + str(eachY).zfill(7) + '_X' + str(eachX).zfill(7)
                 tilepath = tempdirpath + tilename
                 command = "gdal_translate -ot Byte -scale 0 255 -projwin " + str(XCstep) + " " + str(YCstep) + " " + str(
-                    XCstep + ZTILERWSIZE) + " " + str(YCstep - ZTILERWSIZE) + " " + usertiff + " " + tilepath + ".tif"
+                    XCstep + ZTILERWSIZE) + " " + str(YCstep - ZTILERYWSIZE) + " " + usertiff + " " + tilepath + ".tif"
                 tileproc = os.popen(command).read()
                 print(tileproc)
                 coords = []
                 coords.append("{:.7f}".format(XCstep)) # VCoordsLeft
-                coords.append("{:.7f}".format(YCstep - ZTILERWSIZE)) # VCoordsBottom
+                coords.append("{:.7f}".format(YCstep - ZTILERYWSIZE)) # VCoordsBottom
                 coords.append("{:.7f}".format(XCstep + ZTILERWSIZE)) # VCoordsRight
                 coords.append("{:.7f}".format(YCstep)) # VCoordsTop
                 tilefilename = tilename
@@ -90,23 +85,23 @@ def main():
                 Vcoords.append(coords)
                 im = Image.open(tilepath + ".tif")
                 im = im.resize((TILESIZE, TILESIZE), resample=Image.Resampling.BILINEAR)
-                im = im.filter(ImageFilter.SHARPEN)
-                if BrightnessCorrection != 0:
-                    enhb = ImageEnhance.Brightness(im)
-                    im = enhb.enhance(BrightnessCorrection)
-                if ContrastCorrection != 0:
-                    enhc = ImageEnhance.Contrast(im)
-                    im = enhc.enhance(ContrastCorrection)
+                enhs = ImageEnhance.Sharpness(im)
+                im = enhs.enhance(ImageSharpen)
+                enhb = ImageEnhance.Brightness(im)
+                im = enhb.enhance(BrightnessCorrection)
+                enhc = ImageEnhance.Contrast(im)
+                im = enhc.enhance(ContrastCorrection)
                 if ShowTilesc != 0:
                     im.show()
                     ShowTilesc -= 1
                     if ShowTilesc == 0:
+                        shutil.rmtree(tempdirpath)
                         quit()
                 im.save(tilepath + ".jpg", quality=95)
                 os.remove(tilepath + ".tif")
                 XCstep += ZTILERWSIZE
             XCstep = MAPVCoordsLeft
-            YCstep -= ZTILERWSIZE
+            YCstep -= ZTILERYWSIZE
 
     os.remove(geotiffinput + ".aux.xml")
     global MTXfile
@@ -212,6 +207,19 @@ def getZoomLevels():
         ]
     for zoomround in range(zoomrange[0], zoomrange[1]+1):
         MTXfile.append(zoomlevels[zoomround] + '\n')
+
+def levelCorrection(zoom):
+    cors = [ # Multiply factor, Tile Size
+        1,
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512
+    ]
+    return cors[zoom-1]
 
 if __name__=="__main__":
 	main()
